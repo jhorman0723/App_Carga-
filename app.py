@@ -220,27 +220,32 @@ with pestanas[2]:
     accion = st.radio("Selecciona una acción:", ["➕ Registrar Nueva Carga", "✏️ Actualizar Registro Existente", "🗑️ Eliminar Registro"], horizontal=True)
     
     if accion == "➕ Registrar Nueva Carga":
-        with st.form("form_db_carga"):
-            f_fecha = st.date_input("Fecha de la carga", value=datetime.date.today())
-            f_tipo = st.selectbox("Tipo de Carga", ["Carga Lenta (AC)", "Carga Rápida (DC)"])
-            f_soc_i = st.slider("SOC Inicial (%)", 0, 99, 20, 1)
-            f_soc_f = st.slider("SOC Final (%)", 1, 100, 80, 1)
-            f_kwh = st.number_input("Energía entregada (kWh según app o estación)", value=35.0, step=0.1)
-            f_tiempo = st.number_input("Tiempo total (Horas)", value=8.5, step=0.1)
+        # Controles fuera del form para que el cálculo de kWh y costo sea 100% dinámico al modificarlos
+        f_fecha = st.date_input("Fecha de la carga", value=datetime.date.today())
+        f_tipo = st.selectbox("Tipo de Carga", ["Carga Lenta (AC)", "Carga Rápida (DC)"])
+        
+        col_reg1, col_reg2 = st.columns(2)
+        with col_reg1:
+            f_soc_i = st.slider("SOC Inicial (%)", 0, 99, 20, 1, key="reg_soci")
+        with col_reg2:
+            f_soc_f = st.slider("SOC Final (%)", 1, 100, 80, 1, key="reg_socf")
             
-            # Cálculo automático del costo según la tarifa guardada en la base de datos
-            tarifa_aplicada = config['tarifa_lenta'] if "Lenta" in f_tipo else config['tarifa_rapida']
-            costo_calculado = f_kwh * tarifa_aplicada
-            
-            st.info(f"💰 Costo calculado automáticamente según tarifa configurada (${tarifa_aplicada:,.0f}/kWh): **${costo_calculado:,.0f} COP**")
-            
-            f_temp = st.number_input("Temperatura máxima (°C)", value=51.5, step=0.5)
-            
-            submitted = st.form_submit_button("💾 Guardar en Base de Datos")
-            if submitted:
-                estado_t = "Normal" if f_temp <= 55 else "Revisar Calor"
-                guardar_carga(str(f_fecha), f_tipo, f_soc_i, f_soc_f, f_kwh, f_tiempo, costo_calculado, f_temp, estado_t)
-                st.success("¡Carga guardada exitosamente con costo calculado automáticamente!")
+        f_kwh = st.number_input("Energía entregada (kWh según app o estación)", value=35.0, step=0.1, key="reg_kwh")
+        f_tiempo = st.number_input("Tiempo total (Horas)", value=8.5, step=0.1, key="reg_tiempo")
+        
+        # Tarifa dinámica según selección
+        tarifa_aplicada = config['tarifa_lenta'] if "Lenta" in f_tipo else config['tarifa_rapida']
+        costo_dinamico = f_kwh * tarifa_aplicada
+        
+        st.markdown(f"### 💰 Costo Calculado Dinámicamente")
+        st.info(f"Fórmula: `{f_kwh} kWh` × `${tarifa_aplicada:,.0f}/kWh` = **${costo_dinamico:,.0f} COP**")
+        
+        f_temp = st.number_input("Temperatura máxima (°C)", value=51.5, step=0.5, key="reg_temp")
+        
+        if st.button("💾 Guardar Carga en Base de Datos"):
+            estado_t = "Normal" if f_temp <= 55 else "Revisar Calor"
+            guardar_carga(str(f_fecha), f_tipo, f_soc_i, f_soc_f, f_kwh, f_tiempo, costo_dinamico, f_temp, estado_t)
+            st.success(f"¡Carga guardada exitosamente por un costo total de ${costo_dinamico:,.0f} COP!")
 
     elif accion == "✏️ Actualizar Registro Existente":
         df_edit = cargar_historial()
