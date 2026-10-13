@@ -131,13 +131,14 @@ pestanas = st.tabs(["🧮 Calculadora", "⚙️ Configuración", "📝 Registrar
 with pestanas[0]:
     st.subheader("Simulador y Calculadora de Carga")
     
-    st.info(f"⚙️ **Parámetros activos (Base de datos):** Batería: {config['capacidad_bateria']} kWh | Lenta: ${config['tarifa_lenta']:,.0f}/kWh \vert{} Rápida: ${config['tarifa_rapida']:,.0f}/kWh")
+    text_info = f"⚙️ Parámetros activos en BD: Batería: {config['capacidad_bateria']} kWh - Lenta: ${config['tarifa_lenta']:,.0f}/kWh - Rápida: ${config['tarifa_rapida']:,.0f}/kWh"
+    st.info(text_info)
 
     tipo_sim = st.radio("⚡ Tipo de Carga a Simular:", ["Carga Lenta (AC / Casa)", "Carga Rápida (DC / Estación)"], key="tipo_s")
     tarifa_activa = config['tarifa_lenta'] if "Lenta" in tipo_sim else config['tarifa_rapida']
     
     potencia_kw = (config['amperaje'] * config['voltaje']) / 1000.0 if "Lenta" in tipo_sim else 40.0
-    st.write(f"🔌 Potencia Real de Transferencia: **{potencia_kw:.2f} kW** | Tarifa Aplicada: **${tarifa_activa:,.0f} / kWh**")
+    st.write(f"🔌 Potencia Real de Transferencia: **{potencia_kw:.2f} kW** - Tarifa Aplicada: **${tarifa_activa:,.0f} / kWh**")
 
     soc_inicial_sim = st.slider("🔋 Estado de Batería Actual (SOC Inicial)", 0, 99, 20, 5, key="c7") / 100.0
     
@@ -205,7 +206,7 @@ with pestanas[1]:
         save_config_btn = st.form_submit_button("💾 Guardar y Actualizar Configuración")
         if save_config_btn:
             actualizar_config(new_cap, new_amp, new_volt, new_ef, new_rend, new_tlenta, new_trapida)
-            st.success("¡Configuración actualizada en la base de datos con éxito! Recarga o cambia de pestaña para aplicar.")
+            st.success("¡Configuración actualizada en la base de datos con éxito! Recarga la página o cambia de pestaña para aplicar los cambios.")
 
 with pestanas[2]:
     st.subheader("📝 Registrar, Actualizar o Eliminar Cargas")
@@ -225,7 +226,7 @@ with pestanas[2]:
             tarifa_aplicada = config['tarifa_lenta'] if "Lenta" in f_tipo else config['tarifa_rapida']
             costo_calculado = f_kwh * tarifa_aplicada
             
-            st.info(f"💰 Costo calculado automáticamente con base en tarifa configurada (${tarifa_aplicada:,.0f}/kWh): **${costo_calculado:,.0f} COP**")
+            st.info(f"💰 Costo calculado automáticamente según tarifa configurada (${tarifa_aplicada:,.0f}/kWh): **${costo_calculado:,.0f} COP**")
             
             f_temp = st.number_input("Temperatura máxima (°C)", value=51.5, step=0.5)
             
