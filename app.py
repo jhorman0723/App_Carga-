@@ -45,16 +45,22 @@ def init_db():
             amperaje REAL,
             voltaje REAL,
             eficiencia REAL,
-            rendimiento REAL,
+            consumo_100km REAL,
             tarifa_lenta REAL,
             tarifa_rapida REAL
         )
     """)
     
+    # Migración de rendimiento anterior a consumo_100km si aplica
+    cursor.execute("PRAGMA table_info(configuracion);")
+    config_cols = [col[1] for col in cursor.fetchall()]
+    if "rendimiento" in config_cols and "consumo_100km" not in config_cols:
+        cursor.execute("ALTER TABLE configuracion ADD COLUMN consumo_100km REAL DEFAULT 12.0")
+    
     # Insertar configuración por defecto si no existe
     cursor.execute("""
-        INSERT OR IGNORE INTO configuracion (id, capacidad_bateria, amperaje, voltaje, eficiencia, rendimiento, tarifa_lenta, tarifa_rapida)
-        VALUES (1, 45.1, 32, 125, 0.92, 8.33, 850.0, 1250.0)
+        INSERT OR IGNORE INTO configuracion (id, capacidad_bateria, amperaje, voltaje, eficiencia, consumo_100km, tarifa_lenta, tarifa_rapida)
+        VALUES (1, 45.1, 32, 125, 0.92, 12.0, 850.0, 1250.0)
     """)
     
     conn.commit()
@@ -66,27 +72,33 @@ init_db()
 def obtener_config():
     conn = sqlite3.connect("cargas_byd.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT capacidad_bateria, amperaje, voltaje, eficiencia, rendimiento, tarifa_lenta, tarifa_rapida FROM configuracion WHERE id=1")
+    cursor.execute("SELECT capacidad_bateria, amperaje, voltaje, eficiencia, consumo_100km, tarifa_lenta, tarifa_rapida FROM configuracion WHERE id=1")
     row = cursor.fetchone()
     conn.close()
+    
+    # Cálculo automático del rendimiento en km/kWh a partir del consumo por cada 100 km
+    consumo_100 = row[4] if row[4] and row[4] > 0 else 12.0
+    rendimiento_calculado = 100.0 / consumo_100
+    
     return {
         "capacidad_bateria": row[0],
         "amperaje": row[1],
         "voltaje": row[2],
         "eficiencia": row[3],
-        "rendimiento": row[4],
+        "consumo_100km": consumo_100,
+        "rendimiento": rendimiento_calculado,
         "tarifa_lenta": row[5],
         "tarifa_rapida": row[6]
     }
 
-def actualizar_config(cap, amp, volt, ef, rend, t_lenta, t_rapida):
+def actualizar_config(cap, amp, volt, ef, consumo_100, t_lenta, t_rapida):
     conn = sqlite3.connect("cargas_byd.db")
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE configuracion 
-        SET capacidad_bateria=?, amperaje=?, voltaje=?, eficiencia=?, rendimiento=?, tarifa_lenta=?, tarifa_rapida=?
+        SET capacidad_bateria=?, amperaje=?, voltaje=?, eficiencia=?, consumo_100km=?, tarifa_lenta=?, tarifa_rapida=?
         WHERE id=1
-    """, (cap, amp, volt, ef, rend, t_lenta, t_rapida))
+    """, (cap, amp, volt, ef, consumo_100, t_lenta, t_rapida))
     conn.commit()
     conn.close()
 
@@ -137,7 +149,7 @@ pestanas = st.tabs(["🧮 Calculadora", "⚙️ Configuración", "📝 Registrar
 with pestanas[0]:
     st.subheader("Simulador y Calculadora de Carga")
     
-    text_info = f"⚙️ Parámetros activos en BD: Batería: {config['capacidad_bateria']} kWh - Lenta: ${config['tarifa_lenta']:,.0f}/kWh - Rápida: ${config['tarifa_rapida']:,.0f}/kWh"
+    text_info = f"⚙️ Config: Batería: {config['capacidad_bateria']} kWh - Consumo: {config['consumo_100km']} kWh/100km ({config['rendimiento']:.2f} km/kWh)"
     st.info(text_info)
 
     tipo_sim = st.radio("⚡ Tipo de Carga a Simular:", ["Carga Lenta (AC / Casa)", "Carga Rápida (DC / Estación)"], key="tipo_s")
@@ -196,14 +208,18 @@ with pestanas[0]:
 
 with pestanas[1]:
     st.subheader("⚙️ Gestión de Configuración y Tarifas en Base de Datos")
-    st.caption("Modifica y actualiza los parámetros generales del vehículo y las tarifas de energía.")
+    st.caption("Registra el consumo estándar del vehículo por cada 100 km; el rendimiento en km/kWh se calcula automáticamente.")
     
     with st.form("form_config"):
         new_cap = st.number_input("Capacidad Batería (kWh)", value=float(config['capacidad_bateria']), step=0.1)
         new_amp = st.number_input("Amperaje Cargador Lento (A)", value=float(config['amperaje']), step=1.0)
         new_volt = st.number_input("Voltaje Promedio Red (V)", value=float(config['voltaje']), step=1.0)
         new_ef = st.slider("Eficiencia de Carga (%)", 80, 100, int(config['eficiencia'] * 100)) / 100.0
-        new_rend = st.number_input("Rendimiento (km/kWh)", value=float(config['rendimiento']), step=0.01)
+        
+        # Campo para registrar kWh por 100 km
+        new_consumo_100 = st.number_input("Consumo estándar (kWh por cada 100 km)", value=float(config['consumo_100km']), step=0.1)
+        rend_auto = 100.0 / new_consumo_100 if new_consumo_100 > 0 else 8.33
+        st.info(f"📊 Rendimiento calculado automáticamente: **{rend_auto:.2f} km/kWh**")
         
         st.markdown("---")
         new_tlenta = st.number_input("Tarifa Carga Lenta ($/kWh - Casa)", value=float(config['tarifa_lenta']), step=10.0)
@@ -211,8 +227,8 @@ with pestanas[1]:
         
         save_config_btn = st.form_submit_button("💾 Guardar y Actualizar Configuración")
         if save_config_btn:
-            actualizar_config(new_cap, new_amp, new_volt, new_ef, new_rend, new_tlenta, new_trapida)
-            st.success("¡Configuración actualizada en la base de datos con éxito! Recarga la página o cambia de pestaña para aplicar los cambios.")
+            actualizar_config(new_cap, new_amp, new_volt, new_ef, new_consumo_100, new_tlenta, new_trapida)
+            st.success("¡Configuración actualizada con éxito! Recarga la página o cambia de pestaña para aplicar.")
 
 with pestanas[2]:
     st.subheader("📝 Registrar, Actualizar o Eliminar Cargas")
@@ -220,7 +236,6 @@ with pestanas[2]:
     accion = st.radio("Selecciona una acción:", ["➕ Registrar Nueva Carga", "✏️ Actualizar Registro Existente", "🗑️ Eliminar Registro"], horizontal=True)
     
     if accion == "➕ Registrar Nueva Carga":
-        # Controles fuera del form para que el cálculo de kWh y costo sea 100% dinámico al modificarlos
         f_fecha = st.date_input("Fecha de la carga", value=datetime.date.today())
         f_tipo = st.selectbox("Tipo de Carga", ["Carga Lenta (AC)", "Carga Rápida (DC)"])
         
@@ -233,7 +248,7 @@ with pestanas[2]:
         f_kwh = st.number_input("Energía entregada (kWh según app o estación)", value=35.0, step=0.1, key="reg_kwh")
         f_tiempo = st.number_input("Tiempo total (Horas)", value=8.5, step=0.1, key="reg_tiempo")
         
-        # Tarifa dinámica según selección
+        # Cálculo automático dinámico del costo
         tarifa_aplicada = config['tarifa_lenta'] if "Lenta" in f_tipo else config['tarifa_rapida']
         costo_dinamico = f_kwh * tarifa_aplicada
         
@@ -261,7 +276,6 @@ with pestanas[2]:
                 u_kwh = st.number_input("Energía (kWh)", value=float(row_data['energia_kwh']))
                 u_tiempo = st.number_input("Tiempo (Horas)", value=float(row_data['tiempo_horas']))
                 
-                # Recalcular automáticamente costo sugerido
                 t_ap = config['tarifa_lenta'] if "Lenta" in u_tipo else config['tarifa_rapida']
                 u_costo = st.number_input("Costo (COP) [Sugerido: kWh x Tarifa]", value=float(u_kwh * t_ap))
                 
