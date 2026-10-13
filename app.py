@@ -14,6 +14,8 @@ st.set_page_config(
 def init_db():
     conn = sqlite3.connect("cargas_byd.db")
     cursor = conn.cursor()
+    
+    # Tabla de cargas históricas
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS cargas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,6 +35,7 @@ def init_db():
     if "tipo_carga" not in columnas:
         cursor.execute("ALTER TABLE cargas ADD COLUMN tipo_carga TEXT DEFAULT 'Carga Lenta (AC)'")
 
+    # Tabla de configuración global
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS configuracion (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -42,17 +45,20 @@ def init_db():
             eficiencia REAL,
             consumo_100km REAL,
             tarifa_lenta REAL,
-            tarifa_rapida REAL
+            tarifa_rapida REAL,
+            autonomia_100_actual REAL
         )
     """)
     cursor.execute("PRAGMA table_info(configuracion);")
     config_cols = [col[1] for col in cursor.fetchall()]
+    if "autonomia_100_actual" not in config_cols:
+        cursor.execute("ALTER TABLE configuracion ADD COLUMN autonomia_100_actual REAL DEFAULT 380.0")
     if "rendimiento" in config_cols and "consumo_100km" not in config_cols:
         cursor.execute("ALTER TABLE configuracion ADD COLUMN consumo_100km REAL DEFAULT 12.0")
     
     cursor.execute("""
-        INSERT OR IGNORE INTO configuracion (id, capacidad_bateria, amperaje, voltaje, eficiencia, consumo_100km, tarifa_lenta, tarifa_rapida)
-        VALUES (1, 45.1, 32, 125, 0.92, 12.0, 850.0, 1250.0)
+        INSERT OR IGNORE INTO configuracion (id, capacidad_bateria, amperaje, voltaje, eficiencia, consumo_100km, tarifa_lenta, tarifa_rapida, autonomia_100_actual)
+        VALUES (1, 45.1, 32, 125, 0.92, 12.0, 850.0, 1250.0, 380.0)
     """)
     conn.commit()
     conn.close()
@@ -62,11 +68,12 @@ init_db()
 def obtener_config():
     conn = sqlite3.connect("cargas_byd.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT capacidad_bateria, amperaje, voltaje, eficiencia, consumo_100km, tarifa_lenta, tarifa_rapida FROM configuracion WHERE id=1")
+    cursor.execute("SELECT capacidad_bateria, amperaje, voltaje, eficiencia, consumo_100km, tarifa_lenta, tarifa_rapida, autonomia_100_actual FROM configuracion WHERE id=1")
     row = cursor.fetchone()
     conn.close()
     consumo_100 = row[4] if row[4] and row[4] > 0 else 12.0
     rendimiento_calculado = 100.0 / consumo_100
+    auto_100 = row[7] if len(row) > 7 and row[7] else 380.0
     return {
         "capacidad_bateria": row[0],
         "amperaje": row[1],
@@ -75,17 +82,18 @@ def obtener_config():
         "consumo_100km": consumo_100,
         "rendimiento": rendimiento_calculado,
         "tarifa_lenta": row[5],
-        "tarifa_rapida": row[6]
+        "tarifa_rapida": row[6],
+        "autonomia_100_actual": auto_100
     }
 
-def actualizar_config(cap, amp, volt, ef, consumo_100, t_lenta, t_rapida):
+def actualizar_config(cap, amp, volt, ef, consumo_100, t_lenta, t_rapida, auto_100):
     conn = sqlite3.connect("cargas_byd.db")
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE configuracion 
-        SET capacidad_bateria=?, amperaje=?, voltaje=?, eficiencia=?, consumo_100km=?, tarifa_lenta=?, tarifa_rapida=?
+        SET capacidad_bateria=?, amperaje=?, voltaje=?, eficiencia=?, consumo_100km=?, tarifa_lenta=?, tarifa_rapida=?, autonomia_100_actual=?
         WHERE id=1
-    """, (cap, amp, volt, ef, consumo_100, t_lenta, t_rapida))
+    """, (cap, amp, volt, ef, consumo_100, t_lenta, t_rapida, auto_100))
     conn.commit()
     conn.close()
 
@@ -124,11 +132,11 @@ def cargar_historial():
 
 config = obtener_config()
 
-# --- ENCABEZADO NATIVO Y LIMPIO ---
+# --- ENCABEZADO PRINCIPAL ---
 st.title("⚡ BYD Yuan Up")
-st.caption("Gestor Inteligente de Carga y Consumo de Energía")
+st.caption("Gestor Inteligente de Carga, Consumo y Salud de Batería (SOH)")
 
-pestanas = st.tabs(["🧮 Calculadora", "📝 Registrar Carga", "📊 Historial y Métricas", "⚙️ Configuración"])
+pestanas = st.tabs(["🧮 Calculadora", "📝 Registrar Carga", "📊 Historial y Métricas", "🔋 Salud Batería (SOH)", "⚙️ Configuración"])
 
 # TAB 1: CALCULADORA Y SIMULADOR
 with pestanas[0]:
@@ -161,7 +169,7 @@ with pestanas[0]:
     elif modo == "Tiempo Disponible (Horas)":
         horas_disp = st.number_input("Horas disponibles para cargar", 0.5, 24.0, 4.0, 0.5, key="c10")
         energia_req = horas_disp * potencia_kw * config['eficiencia']
-        soc_ganado = energia_req / config['capacidad_bateria']
+        soc_ganado = energia_req / capacidad_bateria if 'capacidad_bateria' in locals() else energia_req / config['capacidad_bateria']
         soc_final = min(1.0, soc_inicial_sim + soc_ganado)
         tiempo_horas = horas_disp
         km_ganados = energia_req * config['rendimiento']
@@ -181,7 +189,6 @@ with pestanas[0]:
 
     st.markdown("---")
     
-    # Métricas nativas de Streamlit con legibilidad perfecta
     m1, m2 = st.columns(2)
     m1.metric("⏱️ Tiempo Estimado", f"{int(tiempo_horas)}h {int((tiempo_horas%1)*60)}m")
     m2.metric("⚡ Energía Requerida", f"{energia_req:.1f} kWh")
@@ -283,8 +290,59 @@ with pestanas[2]:
     else:
         st.info("Aún no hay historial de cargas registrado.")
 
-# TAB 4: AJUSTES Y CONFIGURACIÓN
+# TAB 4: MÓDULO SOH DE BATERÍA
 with pestanas[3]:
+    st.subheader("🔋 Diagnóstico y Salud de Batería (SOH)")
+    df_soh = cargar_historial()
+    
+    # 1. Proporción AC vs DC
+    if not df_soh.empty:
+        kwh_ac = df_soh[df_soh['tipo_carga'].str.contains('Lenta', na=False)]['energia_kwh'].sum()
+        kwh_dc = df_soh[df_soh['tipo_carga'].str.contains('Rápida', na=False)]['energia_kwh'].sum()
+        total_soh_kwh = kwh_ac + kwh_dc
+        
+        pct_ac = (kwh_ac / total_soh_kwh * 100) if total_soh_kwh > 0 else 100.0
+        pct_dc = (kwh_dc / total_soh_kwh * 100) if total_soh_kwh > 0 else 0.0
+        
+        st.write("### ⚖️ Proporción de Carga AC (Lenta) vs. DC (Rápida)")
+        
+        c_ac, c_dc = st.columns(2)
+        c_ac.metric("Carga Lenta (AC)", f"{pct_ac:.1f}%", f"{kwh_ac:.1f} kWh")
+        c_dc.metric("Carga Rápida (DC)", f"{pct_dc:.1f}%", f"{kwh_dc:.1f} kWh")
+        
+        # Evaluación de salud por perfil de carga
+        if pct_ac >= 80:
+            st.success("🟢 **Perfil Óptimo (80% AC / 20% DC):** Tu hábito de carga es ideal para prolongar la vida útil de las celdas Blade.")
+        elif pct_ac >= 60:
+            st.warning("🟡 **Perfil Aceptable:** Intenta priorizar cargas lentas en casa para evitar el estrés térmico recurrente por cargas DC rápidas.")
+        else:
+            st.error("🔴 **Alerta de Uso Carga Rápida:** Has realizado más del 40% de tus cargas en modo DC rápido. Se recomienda incrementar el uso de carga lenta AC.")
+    else:
+        st.info("Registra tus primeras cargas para calcular la proporción AC/DC de tu vehículo.")
+
+    st.markdown("---")
+    
+    # 2. Estado de Salud (SOH) basado en autonomía teórica
+    st.write("### 📉 Estado de Capacidad Estimado (SOH)")
+    
+    auto_fabrica = 380.0  # Autonomía estándar de referencia BYD Yuan Up
+    auto_actual = float(config.get('autonomia_100_actual', 380.0))
+    
+    soh_estimado = (auto_actual / auto_fabrica) * 100.0
+    
+    m_soh1, m_soh2 = st.columns(2)
+    m_soh1.metric("SOH Estimado", f"{soh_estimado:.1f}%")
+    m_soh2.metric("Autonomía 100% Registrada", f"{auto_actual:.0f} km", f"{auto_actual - auto_fabrica:.0f} km vs Fábrica")
+    
+    st.progress(min(1.0, max(0.0, soh_estimado / 100.0)))
+    
+    with st.container(border=True):
+        st.write("💡 **Consejo de Mantenimiento BYD Blade Battery:**")
+        st.caption("• Para calibrar el sistema BMS y balancear las celdas, realiza una carga completa en AC Lenta hasta el 100% al menos una vez al mes.")
+        st.caption("• En el uso diario, procura mantener la batería entre el 20% y el 80% para evitar la degradación química prematura.")
+
+# TAB 5: AJUSTES Y CONFIGURACIÓN
+with pestanas[4]:
     st.subheader("Configuración y Tarifas en Base de Datos")
     with st.form("form_config"):
         new_cap = st.number_input("Capacidad Batería (kWh)", value=float(config['capacidad_bateria']), step=0.1)
@@ -297,9 +355,12 @@ with pestanas[3]:
         st.caption(f"Rendimiento equivalente calculado: **{rend_auto:.2f} km/kWh**")
         
         st.markdown("---")
+        new_auto_100 = st.number_input("Autonomía actual estimada al 100% (km en pantalla del carro)", value=float(config.get('autonomia_100_actual', 380.0)), step=1.0)
+        
+        st.markdown("---")
         new_tlenta = st.number_input("Tarifa Carga Lenta ($/kWh - Casa)", value=float(config['tarifa_lenta']), step=10.0)
         new_trapida = st.number_input("Tarifa Carga Rápida ($/kWh - Estación)", value=float(config['tarifa_rapida']), step=10.0)
         
         if st.form_submit_button("💾 Guardar Configuración", type="primary", use_container_width=True):
-            actualizar_config(new_cap, new_amp, new_volt, new_ef, new_consumo_100, new_tlenta, new_trapida)
+            actualizar_config(new_cap, new_amp, new_volt, new_ef, new_consumo_100, new_tlenta, new_trapida, new_auto_100)
             st.success("¡Configuración actualizada en la base de datos!")
