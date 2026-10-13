@@ -14,6 +14,8 @@ st.set_page_config(
 def init_db():
     conn = sqlite3.connect("cargas_byd.db")
     cursor = conn.cursor()
+    
+    # Tabla de cargas históricas
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS cargas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,12 +30,61 @@ def init_db():
             estado_termico TEXT
         )
     """)
+    
+    # Tabla de configuración global (Tarifas y Vehículo)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS configuracion (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            capacidad_bateria REAL,
+            amperaje REAL,
+            voltaje REAL,
+            eficiencia REAL,
+            rendimiento REAL,
+            tarifa_lenta REAL,
+            tarifa_rapida REAL
+        )
+    """)
+    
+    # Insertar configuración por defecto si no existe
+    cursor.execute("""
+        INSERT OR IGNORE INTO configuracion (id, capacidad_bateria, amperaje, voltaje, eficiencia, rendimiento, tarifa_lenta, tarifa_rapida)
+        VALUES (1, 45.1, 32, 125, 0.92, 8.33, 850.0, 1250.0)
+    """)
+    
     conn.commit()
     conn.close()
 
 init_db()
 
-# Funciones de BD
+# Funciones de configuración
+def obtener_config():
+    conn = sqlite3.connect("cargas_byd.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT capacidad_bateria, amperaje, voltaje, eficiencia, rendimiento, tarifa_lenta, tarifa_rapida FROM configuracion WHERE id=1")
+    row = cursor.fetchone()
+    conn.close()
+    return {
+        "capacidad_bateria": row[0],
+        "amperaje": row[1],
+        "voltaje": row[2],
+        "eficiencia": row[3],
+        "rendimiento": row[4],
+        "tarifa_lenta": row[5],
+        "tarifa_rapida": row[6]
+    }
+
+def actualizar_config(cap, amp, volt, ef, rend, t_lenta, t_rapida):
+    conn = sqlite3.connect("cargas_byd.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE configuracion 
+        SET capacidad_bateria=?, amperaje=?, voltaje=?, eficiencia=?, rendimiento=?, tarifa_lenta=?, tarifa_rapida=?
+        WHERE id=1
+    """, (cap, amp, volt, ef, rend, t_lenta, t_rapida))
+    conn.commit()
+    conn.close()
+
+# Funciones de cargas
 def guardar_carga(fecha, tipo_carga, soc_i, soc_f, kwh, tiempo, costo, temp, estado):
     conn = sqlite3.connect("cargas_byd.db")
     cursor = conn.cursor()
@@ -67,33 +118,26 @@ def cargar_historial():
     conn.close()
     return df
 
+# Obtener configuración actual de la BD
+config = obtener_config()
+
 # --- 2. INTERFAZ DE USUARIO ---
 st.title("⚡ BYD Yuan Up - Gestor Inteligente")
-st.caption("Calculadora, control de costos por tipo de carga y base de datos histórica")
+st.caption("Calculadora, control de costos automatizado y base de datos con configuración persistente")
 
 # Menú de navegación en pestañas
-pestanas = st.tabs(["🧮 Calculadora", "📝 Registrar / Editar", "📊 Historial y Gráficos"])
+pestanas = st.tabs(["🧮 Calculadora", "⚙️ Configuración", "📝 Registrar / Editar", "📊 Historial y Gráficos"])
 
 with pestanas[0]:
     st.subheader("Simulador y Calculadora de Carga")
     
-    with st.expander("⚙️ Configuración de Tarifas y Vehículo", expanded=False):
-        capacidad_bateria = st.number_input("Capacidad Batería (kWh)", value=45.1, step=0.1, key="c1")
-        amperaje = st.number_input("Amperaje Cargador Lento (A)", value=32, step=1, key="c2")
-        voltaje = st.number_input("Voltaje Promedio Red (V)", value=125, step=1, key="c3")
-        eficiencia = st.slider("Eficiencia de Carga (%)", 80, 100, 92, key="c4") / 100.0
-        rendimiento = st.number_input("Rendimiento (km/kWh)", value=8.33, step=0.1, key="c5")
-        
-        st.markdown("---")
-        st.markdown("**Tarifas de Energía (COP)**")
-        tarifa_lenta = st.number_input("Tarifa Carga Lenta ($/kWh - Casa)", value=850, step=10, key="t_lenta")
-        tarifa_rapida = st.number_input("Tarifa Carga Rápida ($/kWh - Electrolinera)", value=1250, step=10, key="t_rapida")
+    st.info(f"⚙️ **Parámetros activos (Base de datos):** Batería: {config['capacidad_bateria']} kWh | Lenta: ${config['tarifa_lenta']:,.0f}/kWh \vert{} Rápida: ${config['tarifa_rapida']:,.0f}/kWh")
 
     tipo_sim = st.radio("⚡ Tipo de Carga a Simular:", ["Carga Lenta (AC / Casa)", "Carga Rápida (DC / Estación)"], key="tipo_s")
-    tarifa_activa = tarifa_lenta if "Lenta" in tipo_sim else tarifa_rapida
+    tarifa_activa = config['tarifa_lenta'] if "Lenta" in tipo_sim else config['tarifa_rapida']
     
-    potencia_kw = (amperaje * voltaje) / 1000.0 if "Lenta" in tipo_sim else 40.0 # Estimado rápido DC
-    st.info(f"🔌 **Modo Seleccionado:** {tipo_sim} | Tarifa Aplicada: **${tarifa_activa:,.0f} / kWh**")
+    potencia_kw = (config['amperaje'] * config['voltaje']) / 1000.0 if "Lenta" in tipo_sim else 40.0
+    st.write(f"🔌 Potencia Real de Transferencia: **{potencia_kw:.2f} kW** | Tarifa Aplicada: **${tarifa_activa:,.0f} / kWh**")
 
     soc_inicial_sim = st.slider("🔋 Estado de Batería Actual (SOC Inicial)", 0, 99, 20, 5, key="c7") / 100.0
     
@@ -108,26 +152,26 @@ with pestanas[0]:
     if modo == "Porcentaje Objetivo (%)":
         target_pct = st.slider("Target % (SOC Final deseado)", int(soc_inicial_sim*100)+5, 100, 80, 5, key="c9")
         soc_objetivo = target_pct / 100.0
-        energia_req = capacidad_bateria * (soc_objetivo - soc_inicial_sim)
-        tiempo_horas = energia_req / (potencia_kw * eficiencia)
-        km_ganados = energia_req * rendimiento
+        energia_req = config['capacidad_bateria'] * (soc_objetivo - soc_inicial_sim)
+        tiempo_horas = energia_req / (potencia_kw * config['eficiencia'])
+        km_ganados = energia_req * config['rendimiento']
         costo_total = energia_req * tarifa_activa
         soc_final = soc_objetivo
 
     elif modo == "Tiempo Disponible (Horas)":
         horas_disp = st.number_input("Horas disponibles", 0.5, 24.0, 4.0, 0.5, key="c10")
-        energia_req = horas_disp * potencia_kw * eficiencia
-        soc_ganado = energia_req / capacidad_bateria
+        energia_req = horas_disp * potencia_kw * config['eficiencia']
+        soc_ganado = energia_req / config['capacidad_bateria']
         soc_final = min(1.0, soc_inicial_sim + soc_ganado)
         tiempo_horas = horas_disp
-        km_ganados = energia_req * rendimiento
+        km_ganados = energia_req * config['rendimiento']
         costo_total = energia_req * tarifa_activa
 
     elif modo == "Kilómetros Deseados (km)":
         km_deseados = st.number_input("Kilómetros necesarios", 10, 400, 150, 10, key="c11")
-        energia_req = km_deseados / rendimiento
-        tiempo_horas = energia_req / (potencia_kw * eficiencia)
-        soc_ganado = energia_req / capacidad_bateria
+        energia_req = km_deseados / config['rendimiento']
+        tiempo_horas = energia_req / (potencia_kw * config['eficiencia'])
+        soc_ganado = energia_req / config['capacidad_bateria']
         soc_final = min(1.0, soc_inicial_sim + soc_ganado)
         km_ganados = km_deseados
         costo_total = energia_req * tarifa_activa
@@ -144,9 +188,28 @@ with pestanas[0]:
     col4.metric("💰 Costo Estimado", f"${costo_total:,.0f} COP")
 
 with pestanas[1]:
+    st.subheader("⚙️ Gestión de Configuración y Tarifas en Base de Datos")
+    st.caption("Modifica y actualiza los parámetros generales del vehículo y las tarifas de energía.")
+    
+    with st.form("form_config"):
+        new_cap = st.number_input("Capacidad Batería (kWh)", value=float(config['capacidad_bateria']), step=0.1)
+        new_amp = st.number_input("Amperaje Cargador Lento (A)", value=float(config['amperaje']), step=1.0)
+        new_volt = st.number_input("Voltaje Promedio Red (V)", value=float(config['voltaje']), step=1.0)
+        new_ef = st.slider("Eficiencia de Carga (%)", 80, 100, int(config['eficiencia'] * 100)) / 100.0
+        new_rend = st.number_input("Rendimiento (km/kWh)", value=float(config['rendimiento']), step=0.01)
+        
+        st.markdown("---")
+        new_tlenta = st.number_input("Tarifa Carga Lenta ($/kWh - Casa)", value=float(config['tarifa_lenta']), step=10.0)
+        new_trapida = st.number_input("Tarifa Carga Rápida ($/kWh - Estación)", value=float(config['tarifa_rapida']), step=10.0)
+        
+        save_config_btn = st.form_submit_button("💾 Guardar y Actualizar Configuración")
+        if save_config_btn:
+            actualizar_config(new_cap, new_amp, new_volt, new_ef, new_rend, new_tlenta, new_trapida)
+            st.success("¡Configuración actualizada en la base de datos con éxito! Recarga o cambia de pestaña para aplicar.")
+
+with pestanas[2]:
     st.subheader("📝 Registrar, Actualizar o Eliminar Cargas")
     
-    # Selector de acción
     accion = st.radio("Selecciona una acción:", ["➕ Registrar Nueva Carga", "✏️ Actualizar Registro Existente", "🗑️ Eliminar Registro"], horizontal=True)
     
     if accion == "➕ Registrar Nueva Carga":
@@ -155,20 +218,22 @@ with pestanas[1]:
             f_tipo = st.selectbox("Tipo de Carga", ["Carga Lenta (AC)", "Carga Rápida (DC)"])
             f_soc_i = st.slider("SOC Inicial (%)", 0, 99, 20, 1)
             f_soc_f = st.slider("SOC Final (%)", 1, 100, 80, 1)
-            f_kwh = st.number_input("Energía entregada (kWh)", value=35.0, step=0.1)
+            f_kwh = st.number_input("Energía entregada (kWh según app o estación)", value=35.0, step=0.1)
             f_tiempo = st.number_input("Tiempo total (Horas)", value=8.5, step=0.1)
             
-            # Cálculo automático del costo según tipo de carga predeterminado
-            tarifa_def = 850 if "Lenta" in f_tipo else 1250
-            f_costo = st.number_input("Costo total automático (COP)", value=f_kwh * tarifa_def, step=500.0)
+            # Cálculo automático del costo según la tarifa guardada en la base de datos
+            tarifa_aplicada = config['tarifa_lenta'] if "Lenta" in f_tipo else config['tarifa_rapida']
+            costo_calculado = f_kwh * tarifa_aplicada
+            
+            st.info(f"💰 Costo calculado automáticamente con base en tarifa configurada (${tarifa_aplicada:,.0f}/kWh): **${costo_calculado:,.0f} COP**")
             
             f_temp = st.number_input("Temperatura máxima (°C)", value=51.5, step=0.5)
             
             submitted = st.form_submit_button("💾 Guardar en Base de Datos")
             if submitted:
                 estado_t = "Normal" if f_temp <= 55 else "Revisar Calor"
-                guardar_carga(str(f_fecha), f_tipo, f_soc_i, f_soc_f, f_kwh, f_tiempo, f_costo, f_temp, estado_t)
-                st.success("¡Carga guardada exitosamente!")
+                guardar_carga(str(f_fecha), f_tipo, f_soc_i, f_soc_f, f_kwh, f_tiempo, costo_calculado, f_temp, estado_t)
+                st.success("¡Carga guardada exitosamente con costo calculado automáticamente!")
 
     elif accion == "✏️ Actualizar Registro Existente":
         df_edit = cargar_historial()
@@ -183,7 +248,11 @@ with pestanas[1]:
                 u_soc_f = st.slider("SOC Final (%)", 1, 100, int(row_data['soc_final']))
                 u_kwh = st.number_input("Energía (kWh)", value=float(row_data['energia_kwh']))
                 u_tiempo = st.number_input("Tiempo (Horas)", value=float(row_data['tiempo_horas']))
-                u_costo = st.number_input("Costo (COP)", value=float(row_data['costo_cop']))
+                
+                # Recalcular automáticamente costo sugerido
+                t_ap = config['tarifa_lenta'] if "Lenta" in u_tipo else config['tarifa_rapida']
+                u_costo = st.number_input("Costo (COP) [Sugerido: kWh x Tarifa]", value=float(u_kwh * t_ap))
+                
                 u_temp = st.number_input("Temperatura (°C)", value=float(row_data['temperatura']))
                 
                 update_btn = st.form_submit_button("🔄 Actualizar Registro")
@@ -205,7 +274,7 @@ with pestanas[1]:
         else:
             st.info("No hay registros para eliminar.")
 
-with pestanas[2]:
+with pestanas[3]:
     st.subheader("📊 Historial y Gráficos de Consumo")
     df_graf = cargar_historial()
     
