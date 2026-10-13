@@ -47,7 +47,9 @@ def init_db():
             consumo_100km REAL,
             tarifa_lenta REAL,
             tarifa_rapida REAL,
-            autonomia_100_actual REAL
+            autonomia_100_actual REAL,
+            precio_galon_gasolina REAL,
+            costo_cargador_feyree REAL
         )
     """)
     cursor.execute("PRAGMA table_info(configuracion);")
@@ -56,10 +58,14 @@ def init_db():
         cursor.execute("ALTER TABLE configuracion ADD COLUMN autonomia_100_actual REAL DEFAULT 380.0")
     if "rendimiento" in config_cols and "consumo_100km" not in config_cols:
         cursor.execute("ALTER TABLE configuracion ADD COLUMN consumo_100km REAL DEFAULT 12.0")
+    if "precio_galon_gasolina" not in config_cols:
+        cursor.execute("ALTER TABLE configuracion ADD COLUMN precio_galon_gasolina REAL DEFAULT 15500.0")
+    if "costo_cargador_feyree" not in config_cols:
+        cursor.execute("ALTER TABLE configuracion ADD COLUMN costo_cargador_feyree REAL DEFAULT 1200000.0")
     
     cursor.execute("""
-        INSERT OR IGNORE INTO configuracion (id, capacidad_bateria, amperaje, voltaje, eficiencia, consumo_100km, tarifa_lenta, tarifa_rapida, autonomia_100_actual)
-        VALUES (1, 45.1, 32, 125, 0.92, 12.0, 850.0, 1250.0, 380.0)
+        INSERT OR IGNORE INTO configuracion (id, capacidad_bateria, amperaje, voltaje, eficiencia, consumo_100km, tarifa_lenta, tarifa_rapida, autonomia_100_actual, precio_galon_gasolina, costo_cargador_feyree)
+        VALUES (1, 45.1, 32, 125, 0.92, 12.0, 850.0, 1250.0, 380.0, 15500.0, 1200000.0)
     """)
     conn.commit()
     conn.close()
@@ -69,12 +75,14 @@ init_db()
 def obtener_config():
     conn = sqlite3.connect("cargas_byd.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT capacidad_bateria, amperaje, voltaje, eficiencia, consumo_100km, tarifa_lenta, tarifa_rapida, autonomia_100_actual FROM configuracion WHERE id=1")
+    cursor.execute("SELECT capacidad_bateria, amperaje, voltaje, eficiencia, consumo_100km, tarifa_lenta, tarifa_rapida, autonomia_100_actual, precio_galon_gasolina, costo_cargador_feyree FROM configuracion WHERE id=1")
     row = cursor.fetchone()
     conn.close()
     consumo_100 = row[4] if row[4] and row[4] > 0 else 12.0
     rendimiento_calculado = 100.0 / consumo_100
     auto_100 = row[7] if len(row) > 7 and row[7] else 380.0
+    p_gas = row[8] if len(row) > 8 and row[8] else 15500.0
+    c_feyree = row[9] if len(row) > 9 and row[9] else 1200000.0
     return {
         "capacidad_bateria": row[0],
         "amperaje": row[1],
@@ -84,17 +92,19 @@ def obtener_config():
         "rendimiento": rendimiento_calculado,
         "tarifa_lenta": row[5],
         "tarifa_rapida": row[6],
-        "autonomia_100_actual": auto_100
+        "autonomia_100_actual": auto_100,
+        "precio_galon_gasolina": p_gas,
+        "costo_cargador_feyree": c_feyree
     }
 
-def actualizar_config(cap, amp, volt, ef, consumo_100, t_lenta, t_rapida, auto_100):
+def actualizar_config(cap, amp, volt, ef, consumo_100, t_lenta, t_rapida, auto_100, p_gas, c_feyree):
     conn = sqlite3.connect("cargas_byd.db")
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE configuracion 
-        SET capacidad_bateria=?, amperaje=?, voltaje=?, eficiencia=?, consumo_100km=?, tarifa_lenta=?, tarifa_rapida=?, autonomia_100_actual=?
+        SET capacidad_bateria=?, amperaje=?, voltaje=?, eficiencia=?, consumo_100km=?, tarifa_lenta=?, tarifa_rapida=?, autonomia_100_actual=?, precio_galon_gasolina=?, costo_cargador_feyree=?
         WHERE id=1
-    """, (cap, amp, volt, ef, consumo_100, t_lenta, t_rapida, auto_100))
+    """, (cap, amp, volt, ef, consumo_100, t_lenta, t_rapida, auto_100, p_gas, c_feyree))
     conn.commit()
     conn.close()
 
@@ -135,9 +145,9 @@ config = obtener_config()
 
 # --- ENCABEZADO PRINCIPAL ---
 st.title("⚡ BYD Yuan Up")
-st.caption("Gestor Inteligente de Carga, Consumo y Reportes")
+st.caption("Gestor Inteligente de Carga, Consumo y Ahorro Financiero")
 
-pestanas = st.tabs(["🧮 Calculadora", "📝 Registrar Carga", "📊 Historial y Métricas", "🔋 Salud SOH", "📂 Reportes", "⚙️ Ajustes"])
+pestanas = st.tabs(["🧮 Calculadora", "📝 Registrar Carga", "📊 Historial", "💰 Ahorro & ROI", "🔋 Salud SOH", "📂 Reportes", "⚙️ Ajustes"])
 
 # TAB 1: CALCULADORA Y SIMULADOR
 with pestanas[0]:
@@ -291,8 +301,62 @@ with pestanas[2]:
     else:
         st.info("Aún no hay historial de cargas registrado.")
 
-# TAB 4: MÓDULO SOH DE BATERÍA
+# TAB 4: MÓDULO DE ROI Y AHORRO FINANCIERO
 with pestanas[3]:
+    st.subheader("💰 Ahorro Financiero y ROI vs. Gasolina")
+    df_roi = cargar_historial()
+    
+    if not df_roi.empty:
+        total_kwh_ingresados = df_roi['energia_kwh'].sum()
+        total_gasto_electrico = df_roi['costo_cop'].sum()
+        
+        # Estimación de kilómetros recorridos con esa energía
+        km_equivalentes = total_kwh_ingresados * config['rendimiento']
+        
+        # Gasolina equivalente (40 km por galón promedio de un SUV similar)
+        galones_gasolina_equiv = km_equivalentes / 40.0
+        precio_galon = config['precio_galon_gasolina']
+        costo_gasolina_equiv = galones_gasolina_equiv * precio_galon
+        
+        # Ahorro Neto
+        ahorro_neto = costo_gasolina_equiv - total_gasto_electrico
+        
+        # Costos por km
+        costo_km_elec = total_gasto_electrico / km_equivalentes if km_equivalentes > 0 else 0
+        costo_km_gas = costo_gasolina_equiv / km_equivalentes if km_equivalentes > 0 else 0
+        
+        # ROI Cargador
+        costo_feyree = config['costo_cargador_feyree']
+        pct_amortizado = (ahorro_neto / costo_feyree * 100.0) if costo_feyree > 0 else 0
+        
+        st.write("### 🍃 Balance de Ahorro Acumulado")
+        
+        r1, r2 = st.columns(2)
+        r1.metric("💵 Ahorro Neto Estimado", f"${ahorro_neto:,.0f} COP")
+        r2.metric("⛽ Gasto Gasolina Equiv.", f"${costo_gasolina_equiv:,.0f} COP")
+        
+        st.markdown("---")
+        st.write("### 🚗 Comparativa Costo por Kilómetro Recorrido")
+        
+        ck1, ck2 = st.columns(2)
+        ck1.metric("⚡ BYD Yuan Up", f"${costo_km_elec:,.1f} COP / km")
+        ck2.metric("⛽ Carro a Gasolina", f"${costo_km_gas:,.1f} COP / km", delta=f"-${costo_km_gas - costo_km_elec:,.1f} COP / km", delta_color="normal")
+        
+        st.markdown("---")
+        st.write("### 🔌 Amortización del Cargador Feyree")
+        st.write(f"**Progreso de Pago del Cargador:** {min(100.0, pct_amortizado):.1f}% completado")
+        st.progress(min(1.0, max(0.0, pct_amortizado / 100.0)))
+        
+        if pct_amortizado >= 100:
+            st.success("🎉 ¡Tu cargador Feyree ya se pagó por completo solo con el ahorro en combustible!")
+        else:
+            saldo_pendiente = costo_feyree - ahorro_neto
+            st.info(f"Falta un ahorro de **${saldo_pendiente:,.0f} COP** para recuperar la inversión inicial del cargador (${costo_feyree:,.0f} COP).")
+    else:
+        st.info("Registra sesiones de carga para calcular tu ahorro financiero frente a la gasolina.")
+
+# TAB 5: MÓDULO SOH DE BATERÍA
+with pestanas[4]:
     st.subheader("🔋 Diagnóstico y Salud de Batería (SOH)")
     df_soh = cargar_historial()
     
@@ -332,14 +396,9 @@ with pestanas[3]:
     m_soh2.metric("Autonomía 100% Registrada", f"{auto_actual:.0f} km", f"{auto_actual - auto_fabrica:.0f} km vs Fábrica")
     
     st.progress(min(1.0, max(0.0, soh_estimado / 100.0)))
-    
-    with st.container(border=True):
-        st.write("💡 **Consejo de Mantenimiento BYD Blade Battery:**")
-        st.caption("• Para calibrar el sistema BMS y balancear las celdas, realiza una carga completa en AC Lenta hasta el 100% al menos una vez al mes.")
-        st.caption("• En el uso diario, procura mantener la batería entre el 20% y el 80% para evitar la degradación química prematura.")
 
-# TAB 5: MÓDULO DE EXPORTACIÓN Y REPORTES
-with pestanas[4]:
+# TAB 6: MÓDULO DE EXPORTACIÓN Y REPORTES
+with pestanas[5]:
     st.subheader("📂 Exportación de Reportes e Informes")
     st.caption("Descarga tu información histórica en formato Excel o CSV para contabilidad personal y respaldos.")
     
@@ -348,7 +407,6 @@ with pestanas[4]:
     if not df_exp.empty:
         st.write("### 📥 Opciones de Descarga Directa")
         
-        # 1. Exportación a CSV
         csv_buffer = df_exp.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="📄 Descargar Historial en Formato CSV",
@@ -358,12 +416,9 @@ with pestanas[4]:
             use_container_width=True
         )
         
-        # 2. Exportación a Excel con Pestañas
         output_excel = io.BytesIO()
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
             df_exp.to_excel(writer, sheet_name='Historial Cargas', index=False)
-            
-            # Pestaña de Resumen
             resumen_data = {
                 "Métrica": ["Energía Total (kWh)", "Gasto Total (COP)", "Promedio Temp (°C)", "Total Cargas"],
                 "Valor": [
@@ -385,30 +440,11 @@ with pestanas[4]:
             type="primary",
             use_container_width=True
         )
-        
-        st.markdown("---")
-        st.write("### 📋 Resumen Ejecutivo Imprimible")
-        total_ener = df_exp['energia_kwh'].sum()
-        total_gasto = df_exp['costo_cop'].sum()
-        prom_temp = df_exp['temperatura'].mean()
-        
-        with st.container(border=True):
-            st.markdown(f"""
-            **REPORTE DE AUDITORÍA DE ENERGÍA DE VEHÍCULO ELÉCTRICO**  
-            **Vehículo:** BYD Yuan Up  
-            **Fecha de Emisión:** {datetime.datetime.now().strftime('%Y-%m-%d %I:%M %p')}  
-            
-            ---
-            * **Total Cargas Registradas:** {len(df_exp)} sesiones
-            * **Energía Total Inyectada:** {total_ener:.2f} kWh
-            * **Inversión Total en Energía:** ${total_gasto:,.0f} COP
-            * **Temperatura Promedio Equipo Feyree:** {prom_temp:.1f} °C
-            """)
     else:
-        st.warning("No hay datos guardados para exportar. Registra algunas cargas en la pestaña correspondiente.")
+        st.warning("No hay datos guardados para exportar.")
 
-# TAB 6: AJUSTES Y CONFIGURACIÓN
-with pestanas[5]:
+# TAB 7: AJUSTES Y CONFIGURACIÓN
+with pestanas[6]:
     st.subheader("Configuración y Tarifas en Base de Datos")
     with st.form("form_config"):
         new_cap = st.number_input("Capacidad Batería (kWh)", value=float(config['capacidad_bateria']), step=0.1)
@@ -424,9 +460,14 @@ with pestanas[5]:
         new_auto_100 = st.number_input("Autonomía actual estimada al 100% (km en pantalla del carro)", value=float(config.get('autonomia_100_actual', 380.0)), step=1.0)
         
         st.markdown("---")
+        st.subheader("Parámetros Financieros (ROI y Gasolina)")
+        new_p_gas = st.number_input("Precio Galón de Gasolina ($ COP)", value=float(config.get('precio_galon_gasolina', 15500.0)), step=100.0)
+        new_c_feyree = st.number_input("Inversión Cargador Feyree ($ COP)", value=float(config.get('costo_cargador_feyree', 1200000.0)), step=50000.0)
+        
+        st.markdown("---")
         new_tlenta = st.number_input("Tarifa Carga Lenta ($/kWh - Casa)", value=float(config['tarifa_lenta']), step=10.0)
         new_trapida = st.number_input("Tarifa Carga Rápida ($/kWh - Estación)", value=float(config['tarifa_rapida']), step=10.0)
         
         if st.form_submit_button("💾 Guardar Configuración", type="primary", use_container_width=True):
-            actualizar_config(new_cap, new_amp, new_volt, new_ef, new_consumo_100, new_tlenta, new_trapida, new_auto_100)
+            actualizar_config(new_cap, new_amp, new_volt, new_ef, new_consumo_100, new_tlenta, new_trapida, new_auto_100, new_p_gas, new_c_feyree)
             st.success("¡Configuración actualizada en la base de datos!")
