@@ -10,7 +10,7 @@ st.set_page_config(
     layout="centered"
 )
 
-# --- 1. CONFIGURACIÓN DE LA BASE DE DATOS SQLITE ---
+# --- 1. CONFIGURACIÓN DE LA BASE DE DATOS SQLITE (CON AUTO-MIGRACIÓN) ---
 def init_db():
     conn = sqlite3.connect("cargas_byd.db")
     cursor = conn.cursor()
@@ -31,6 +31,12 @@ def init_db():
         )
     """)
     
+    # Asegurar que la columna tipo_carga exista si la tabla ya fue creada antes
+    cursor.execute("PRAGMA table_info(cargas);")
+    columnas = [col[1] for col in cursor.fetchall()]
+    if "tipo_carga" not in columnas:
+        cursor.execute("ALTER TABLE cargas ADD COLUMN tipo_carga TEXT DEFAULT 'Carga Lenta (AC)'")
+
     # Tabla de configuración global (Tarifas y Vehículo)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS configuracion (
@@ -244,7 +250,7 @@ with pestanas[2]:
             
             with st.form("form_update"):
                 u_fecha = st.date_input("Fecha", value=datetime.datetime.strptime(row_data['fecha'], "%Y-%m-%d").date())
-                u_tipo = st.selectbox("Tipo de Carga", ["Carga Lenta (AC)", "Carga Rápida (DC)"], index=0 if "Lenta" in row_data['tipo_carga'] else 1)
+                u_tipo = st.selectbox("Tipo de Carga", ["Carga Lenta (AC)", "Carga Rápida (DC)"], index=0 if "Lenta" in str(row_data['tipo_carga']) else 1)
                 u_soc_i = st.slider("SOC Inicial (%)", 0, 99, int(row_data['soc_inicial']))
                 u_soc_f = st.slider("SOC Final (%)", 1, 100, int(row_data['soc_final']))
                 u_kwh = st.number_input("Energía (kWh)", value=float(row_data['energia_kwh']))
