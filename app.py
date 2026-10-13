@@ -2,6 +2,7 @@ import streamlit as st
 import datetime
 import pandas as pd
 import sqlite3
+import io
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
@@ -134,9 +135,9 @@ config = obtener_config()
 
 # --- ENCABEZADO PRINCIPAL ---
 st.title("⚡ BYD Yuan Up")
-st.caption("Gestor Inteligente de Carga, Consumo y Salud de Batería (SOH)")
+st.caption("Gestor Inteligente de Carga, Consumo y Reportes")
 
-pestanas = st.tabs(["🧮 Calculadora", "📝 Registrar Carga", "📊 Historial y Métricas", "🔋 Salud Batería (SOH)", "⚙️ Configuración"])
+pestanas = st.tabs(["🧮 Calculadora", "📝 Registrar Carga", "📊 Historial y Métricas", "🔋 Salud SOH", "📂 Reportes", "⚙️ Ajustes"])
 
 # TAB 1: CALCULADORA Y SIMULADOR
 with pestanas[0]:
@@ -169,7 +170,7 @@ with pestanas[0]:
     elif modo == "Tiempo Disponible (Horas)":
         horas_disp = st.number_input("Horas disponibles para cargar", 0.5, 24.0, 4.0, 0.5, key="c10")
         energia_req = horas_disp * potencia_kw * config['eficiencia']
-        soc_ganado = energia_req / capacidad_bateria if 'capacidad_bateria' in locals() else energia_req / config['capacidad_bateria']
+        soc_ganado = energia_req / config['capacidad_bateria']
         soc_final = min(1.0, soc_inicial_sim + soc_ganado)
         tiempo_horas = horas_disp
         km_ganados = energia_req * config['rendimiento']
@@ -295,7 +296,6 @@ with pestanas[3]:
     st.subheader("🔋 Diagnóstico y Salud de Batería (SOH)")
     df_soh = cargar_historial()
     
-    # 1. Proporción AC vs DC
     if not df_soh.empty:
         kwh_ac = df_soh[df_soh['tipo_carga'].str.contains('Lenta', na=False)]['energia_kwh'].sum()
         kwh_dc = df_soh[df_soh['tipo_carga'].str.contains('Rápida', na=False)]['energia_kwh'].sum()
@@ -310,7 +310,6 @@ with pestanas[3]:
         c_ac.metric("Carga Lenta (AC)", f"{pct_ac:.1f}%", f"{kwh_ac:.1f} kWh")
         c_dc.metric("Carga Rápida (DC)", f"{pct_dc:.1f}%", f"{kwh_dc:.1f} kWh")
         
-        # Evaluación de salud por perfil de carga
         if pct_ac >= 80:
             st.success("🟢 **Perfil Óptimo (80% AC / 20% DC):** Tu hábito de carga es ideal para prolongar la vida útil de las celdas Blade.")
         elif pct_ac >= 60:
@@ -322,12 +321,10 @@ with pestanas[3]:
 
     st.markdown("---")
     
-    # 2. Estado de Salud (SOH) basado en autonomía teórica
     st.write("### 📉 Estado de Capacidad Estimado (SOH)")
     
-    auto_fabrica = 380.0  # Autonomía estándar de referencia BYD Yuan Up
+    auto_fabrica = 380.0
     auto_actual = float(config.get('autonomia_100_actual', 380.0))
-    
     soh_estimado = (auto_actual / auto_fabrica) * 100.0
     
     m_soh1, m_soh2 = st.columns(2)
@@ -341,8 +338,77 @@ with pestanas[3]:
         st.caption("• Para calibrar el sistema BMS y balancear las celdas, realiza una carga completa en AC Lenta hasta el 100% al menos una vez al mes.")
         st.caption("• En el uso diario, procura mantener la batería entre el 20% y el 80% para evitar la degradación química prematura.")
 
-# TAB 5: AJUSTES Y CONFIGURACIÓN
+# TAB 5: MÓDULO DE EXPORTACIÓN Y REPORTES
 with pestanas[4]:
+    st.subheader("📂 Exportación de Reportes e Informes")
+    st.caption("Descarga tu información histórica en formato Excel o CSV para contabilidad personal y respaldos.")
+    
+    df_exp = cargar_historial()
+    
+    if not df_exp.empty:
+        st.write("### 📥 Opciones de Descarga Directa")
+        
+        # 1. Exportación a CSV
+        csv_buffer = df_exp.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📄 Descargar Historial en Formato CSV",
+            data=csv_buffer,
+            file_name=f"historial_cargas_BYD_{datetime.date.today()}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+        
+        # 2. Exportación a Excel con Pestañas
+        output_excel = io.BytesIO()
+        with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
+            df_exp.to_excel(writer, sheet_name='Historial Cargas', index=False)
+            
+            # Pestaña de Resumen
+            resumen_data = {
+                "Métrica": ["Energía Total (kWh)", "Gasto Total (COP)", "Promedio Temp (°C)", "Total Cargas"],
+                "Valor": [
+                    df_exp['energia_kwh'].sum(),
+                    df_exp['costo_cop'].sum(),
+                    df_exp['temperatura'].mean(),
+                    len(df_exp)
+                ]
+            }
+            pd.DataFrame(resumen_data).to_excel(writer, sheet_name='Resumen Métricas', index=False)
+            
+        excel_data = output_excel.getvalue()
+        
+        st.download_button(
+            label="📊 Descargar Informe Completo en Excel (.xlsx)",
+            data=excel_data,
+            file_name=f"informe_cargas_BYD_{datetime.date.today()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            use_container_width=True
+        )
+        
+        st.markdown("---")
+        st.write("### 📋 Resumen Ejecutivo Imprimible")
+        total_ener = df_exp['energia_kwh'].sum()
+        total_gasto = df_exp['costo_cop'].sum()
+        prom_temp = df_exp['temperatura'].mean()
+        
+        with st.container(border=True):
+            st.markdown(f"""
+            **REPORTE DE AUDITORÍA DE ENERGÍA DE VEHÍCULO ELÉCTRICO**  
+            **Vehículo:** BYD Yuan Up  
+            **Fecha de Emisión:** {datetime.datetime.now().strftime('%Y-%m-%d %I:%M %p')}  
+            
+            ---
+            * **Total Cargas Registradas:** {len(df_exp)} sesiones
+            * **Energía Total Inyectada:** {total_ener:.2f} kWh
+            * **Inversión Total en Energía:** ${total_gasto:,.0f} COP
+            * **Temperatura Promedio Equipo Feyree:** {prom_temp:.1f} °C
+            """)
+    else:
+        st.warning("No hay datos guardados para exportar. Registra algunas cargas en la pestaña correspondiente.")
+
+# TAB 6: AJUSTES Y CONFIGURACIÓN
+with pestanas[5]:
     st.subheader("Configuración y Tarifas en Base de Datos")
     with st.form("form_config"):
         new_cap = st.number_input("Capacidad Batería (kWh)", value=float(config['capacidad_bateria']), step=0.1)
