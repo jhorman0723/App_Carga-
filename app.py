@@ -117,7 +117,7 @@ st.markdown("""
         border-color: #58A6FF !important;
     }
 </style>
-""", unsafe_allow_html=unsafe_allow_style_type=True)
+""", unsafe_allow_html=True)
 
 # --- 1. BASE DE DATOS SQLITE ---
 def init_db():
@@ -326,7 +326,12 @@ with pestanas[0]:
 # TAB 2: REGISTRAR Y EDITAR CARGAS
 with pestanas[1]:
     st.subheader("📝 Gestión de Sesiones")
-    accion = st.segmented_control("Acción:", ["➕ Agregar", "✏️ Editar", "🗑️ Eliminar"], default="➕ Agregar")
+    
+    # Manejo seguro para versiones de Streamlit que no soportan st.segmented_control
+    try:
+        accion = st.segmented_control("Acción:", ["➕ Agregar", "✏️ Editar", "🗑️ Eliminar"], default="➕ Agregar")
+    except AttributeError:
+        accion = st.radio("Acción:", ["➕ Agregar", "✏️ Editar", "🗑️ Eliminar"], horizontal=True)
     
     if accion == "➕ Agregar":
         f_fecha = st.date_input("Fecha", value=datetime.date.today())
