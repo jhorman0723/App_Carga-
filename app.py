@@ -36,7 +36,7 @@ def init_db():
     if "tipo_carga" not in columnas:
         cursor.execute("ALTER TABLE cargas ADD COLUMN tipo_carga TEXT DEFAULT 'Carga Lenta (AC)'")
 
-    # Tabla de configuración global
+    # Tabla de configuración global con potencias personalizadas
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS configuracion (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -49,11 +49,14 @@ def init_db():
             tarifa_rapida REAL,
             autonomia_100_actual REAL,
             precio_galon_gasolina REAL,
-            costo_cargador_feyree REAL
+            costo_cargador_feyree REAL,
+            potencia_lenta_kw REAL,
+            potencia_rapida_kw REAL
         )
     """)
     cursor.execute("PRAGMA table_info(configuracion);")
     config_cols = [col[1] for col in cursor.fetchall()]
+    
     if "autonomia_100_actual" not in config_cols:
         cursor.execute("ALTER TABLE configuracion ADD COLUMN autonomia_100_actual REAL DEFAULT 380.0")
     if "rendimiento" in config_cols and "consumo_100km" not in config_cols:
@@ -62,10 +65,18 @@ def init_db():
         cursor.execute("ALTER TABLE configuracion ADD COLUMN precio_galon_gasolina REAL DEFAULT 15500.0")
     if "costo_cargador_feyree" not in config_cols:
         cursor.execute("ALTER TABLE configuracion ADD COLUMN costo_cargador_feyree REAL DEFAULT 1200000.0")
+    if "potencia_lenta_kw" not in config_cols:
+        cursor.execute("ALTER TABLE configuracion ADD COLUMN potencia_lenta_kw REAL DEFAULT 4.0")
+    if "potencia_rapida_kw" not in config_cols:
+        cursor.execute("ALTER TABLE configuracion ADD COLUMN potencia_rapida_kw REAL DEFAULT 40.0")
     
     cursor.execute("""
-        INSERT OR IGNORE INTO configuracion (id, capacidad_bateria, amperaje, voltaje, eficiencia, consumo_100km, tarifa_lenta, tarifa_rapida, autonomia_100_actual, precio_galon_gasolina, costo_cargador_feyree)
-        VALUES (1, 45.1, 32, 125, 0.92, 12.0, 850.0, 1250.0, 380.0, 15500.0, 1200000.0)
+        INSERT OR IGNORE INTO configuracion (
+            id, capacidad_bateria, amperaje, voltaje, eficiencia, consumo_100km, 
+            tarifa_lenta, tarifa_rapida, autonomia_100_actual, precio_galon_gasolina, 
+            costo_cargador_feyree, potencia_lenta_kw, potencia_rapida_kw
+        )
+        VALUES (1, 45.1, 32, 125, 0.92, 12.0, 850.0, 1250.0, 380.0, 15500.0, 1200000.0, 4.0, 40.0)
     """)
     conn.commit()
     conn.close()
@@ -75,14 +86,23 @@ init_db()
 def obtener_config():
     conn = sqlite3.connect("cargas_byd.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT capacidad_bateria, amperaje, voltaje, eficiencia, consumo_100km, tarifa_lenta, tarifa_rapida, autonomia_100_actual, precio_galon_gasolina, costo_cargador_feyree FROM configuracion WHERE id=1")
+    cursor.execute("""
+        SELECT capacidad_bateria, amperaje, voltaje, eficiencia, consumo_100km, 
+               tarifa_lenta, tarifa_rapida, autonomia_100_actual, precio_galon_gasolina, 
+               costo_cargador_feyree, potencia_lenta_kw, potencia_rapida_kw 
+        FROM configuracion WHERE id=1
+    """)
     row = cursor.fetchone()
     conn.close()
+    
     consumo_100 = row[4] if row[4] and row[4] > 0 else 12.0
     rendimiento_calculado = 100.0 / consumo_100
-    auto_100 = row[7] if len(row) > 7 and row[7] else 380.0
-    p_gas = row[8] if len(row) > 8 and row[8] else 15500.0
-    c_feyree = row[9] if len(row) > 9 and row[9] else 1200000.0
+    auto_100 = row[7] if row[7] else 380.0
+    p_gas = row[8] if row[8] else 15500.0
+    c_feyree = row[9] if row[9] else 1200000.0
+    p_lenta = row[10] if row[10] else 4.0
+    p_rapida = row[11] if row[11] else 40.0
+    
     return {
         "capacidad_bateria": row[0],
         "amperaje": row[1],
@@ -94,17 +114,21 @@ def obtener_config():
         "tarifa_rapida": row[6],
         "autonomia_100_actual": auto_100,
         "precio_galon_gasolina": p_gas,
-        "costo_cargador_feyree": c_feyree
+        "costo_cargador_feyree": c_feyree,
+        "potencia_lenta_kw": p_lenta,
+        "potencia_rapida_kw": p_rapida
     }
 
-def actualizar_config(cap, amp, volt, ef, consumo_100, t_lenta, t_rapida, auto_100, p_gas, c_feyree):
+def actualizar_config(cap, amp, volt, ef, consumo_100, t_lenta, t_rapida, auto_100, p_gas, c_feyree, p_lenta, p_rapida):
     conn = sqlite3.connect("cargas_byd.db")
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE configuracion 
-        SET capacidad_bateria=?, amperaje=?, voltaje=?, eficiencia=?, consumo_100km=?, tarifa_lenta=?, tarifa_rapida=?, autonomia_100_actual=?, precio_galon_gasolina=?, costo_cargador_feyree=?
+        SET capacidad_bateria=?, amperaje=?, voltaje=?, eficiencia=?, consumo_100km=?, 
+            tarifa_lenta=?, tarifa_rapida=?, autonomia_100_actual=?, precio_galon_gasolina=?, 
+            costo_cargador_feyree=?, potencia_lenta_kw=?, potencia_rapida_kw=?
         WHERE id=1
-    """, (cap, amp, volt, ef, consumo_100, t_lenta, t_rapida, auto_100, p_gas, c_feyree))
+    """, (cap, amp, volt, ef, consumo_100, t_lenta, t_rapida, auto_100, p_gas, c_feyree, p_lenta, p_rapida))
     conn.commit()
     conn.close()
 
@@ -145,7 +169,7 @@ config = obtener_config()
 
 # --- ENCABEZADO PRINCIPAL ---
 st.title("⚡ BYD Yuan Up")
-st.caption("Gestor Inteligente de Carga, Consumo y Ahorro Financiero")
+st.caption("Gestor Inteligente de Carga, Consumo y Potencias")
 
 pestanas = st.tabs(["🧮 Calculadora", "📝 Registrar Carga", "📊 Historial", "💰 Ahorro & ROI", "🔋 Salud SOH", "📂 Reportes", "⚙️ Ajustes"])
 
@@ -154,10 +178,18 @@ with pestanas[0]:
     st.subheader("Simulador de Carga")
     
     tipo_sim = st.radio("Tipo de Carga:", ["Carga Lenta (AC / Casa)", "Carga Rápida (DC / Estación)"], horizontal=True, key="tipo_s")
-    tarifa_activa = config['tarifa_lenta'] if "Lenta" in tipo_sim else config['tarifa_rapida']
-    potencia_kw = (config['amperaje'] * config['voltaje']) / 1000.0 if "Lenta" in tipo_sim else 40.0
     
-    st.info(f"🔌 Potencia: **{potencia_kw:.2f} kW** | Tarifa: **${tarifa_activa:,.0f} / kWh**")
+    # Asignación de tarifas y potencias personalizadas desde la base de datos
+    if "Lenta" in tipo_sim:
+        tarifa_activa = config['tarifa_lenta']
+        potencia_kw = config['potencia_lenta_kw']
+        modo_texto = "AC (Lenta)"
+    else:
+        tarifa_activa = config['tarifa_rapida']
+        potencia_kw = config['potencia_rapida_kw']
+        modo_texto = "DC (Rápida)"
+    
+    st.info(f"🔌 Modo: **{modo_texto}** | Potencia Configurada: **{potencia_kw:.2f} kW** | Tarifa: **${tarifa_activa:,.0f} / kWh**")
 
     soc_inicial_sim = st.slider("🔋 Estado de Batería Actual (SOC Inicial)", 0, 99, 20, 5, key="c7") / 100.0
     modo = st.selectbox("🎯 ¿Qué deseas calcular?", ["Porcentaje Objetivo (%)", "Tiempo Disponible (Horas)", "Kilómetros Deseados (km)"], key="c8")
@@ -310,34 +342,25 @@ with pestanas[3]:
         total_kwh_ingresados = df_roi['energia_kwh'].sum()
         total_gasto_electrico = df_roi['costo_cop'].sum()
         
-        # Estimación de kilómetros recorridos con esa energía
         km_equivalentes = total_kwh_ingresados * config['rendimiento']
-        
-        # Gasolina equivalente (40 km por galón promedio de un SUV similar)
         galones_gasolina_equiv = km_equivalentes / 40.0
         precio_galon = config['precio_galon_gasolina']
         costo_gasolina_equiv = galones_gasolina_equiv * precio_galon
         
-        # Ahorro Neto
         ahorro_neto = costo_gasolina_equiv - total_gasto_electrico
-        
-        # Costos por km
         costo_km_elec = total_gasto_electrico / km_equivalentes if km_equivalentes > 0 else 0
         costo_km_gas = costo_gasolina_equiv / km_equivalentes if km_equivalentes > 0 else 0
         
-        # ROI Cargador
         costo_feyree = config['costo_cargador_feyree']
         pct_amortizado = (ahorro_neto / costo_feyree * 100.0) if costo_feyree > 0 else 0
         
         st.write("### 🍃 Balance de Ahorro Acumulado")
-        
         r1, r2 = st.columns(2)
         r1.metric("💵 Ahorro Neto Estimado", f"${ahorro_neto:,.0f} COP")
         r2.metric("⛽ Gasto Gasolina Equiv.", f"${costo_gasolina_equiv:,.0f} COP")
         
         st.markdown("---")
         st.write("### 🚗 Comparativa Costo por Kilómetro Recorrido")
-        
         ck1, ck2 = st.columns(2)
         ck1.metric("⚡ BYD Yuan Up", f"${costo_km_elec:,.1f} COP / km")
         ck2.metric("⛽ Carro a Gasolina", f"${costo_km_gas:,.1f} COP / km", delta=f"-${costo_km_gas - costo_km_elec:,.1f} COP / km", delta_color="normal")
@@ -351,7 +374,7 @@ with pestanas[3]:
             st.success("🎉 ¡Tu cargador Feyree ya se pagó por completo solo con el ahorro en combustible!")
         else:
             saldo_pendiente = costo_feyree - ahorro_neto
-            st.info(f"Falta un ahorro de **${saldo_pendiente:,.0f} COP** para recuperar la inversión inicial del cargador (${costo_feyree:,.0f} COP).")
+            st.info(f"Falta un ahorro de **${saldo_pendiente:,.0f} COP** para recuperar la inversión inicial del cargador.")
     else:
         st.info("Registra sesiones de carga para calcular tu ahorro financiero frente a la gasolina.")
 
@@ -369,44 +392,36 @@ with pestanas[4]:
         pct_dc = (kwh_dc / total_soh_kwh * 100) if total_soh_kwh > 0 else 0.0
         
         st.write("### ⚖️ Proporción de Carga AC (Lenta) vs. DC (Rápida)")
-        
         c_ac, c_dc = st.columns(2)
         c_ac.metric("Carga Lenta (AC)", f"{pct_ac:.1f}%", f"{kwh_ac:.1f} kWh")
         c_dc.metric("Carga Rápida (DC)", f"{pct_dc:.1f}%", f"{kwh_dc:.1f} kWh")
         
         if pct_ac >= 80:
-            st.success("🟢 **Perfil Óptimo (80% AC / 20% DC):** Tu hábito de carga es ideal para prolongar la vida útil de las celdas Blade.")
+            st.success("🟢 **Perfil Óptimo (80% AC / 20% DC):** Tu hábito de carga es ideal para prolongar la vida útil.")
         elif pct_ac >= 60:
-            st.warning("🟡 **Perfil Aceptable:** Intenta priorizar cargas lentas en casa para evitar el estrés térmico recurrente por cargas DC rápidas.")
+            st.warning("🟡 **Perfil Aceptable:** Intenta priorizar cargas lentas en casa.")
         else:
-            st.error("🔴 **Alerta de Uso Carga Rápida:** Has realizado más del 40% de tus cargas en modo DC rápido. Se recomienda incrementar el uso de carga lenta AC.")
+            st.error("🔴 **Alerta:** Exceso de cargas rápidas DC.")
     else:
-        st.info("Registra tus primeras cargas para calcular la proporción AC/DC de tu vehículo.")
+        st.info("Registra tus primeras cargas para calcular la proporción AC/DC.")
 
     st.markdown("---")
-    
     st.write("### 📉 Estado de Capacidad Estimado (SOH)")
-    
     auto_fabrica = 380.0
     auto_actual = float(config.get('autonomia_100_actual', 380.0))
     soh_estimado = (auto_actual / auto_fabrica) * 100.0
     
     m_soh1, m_soh2 = st.columns(2)
     m_soh1.metric("SOH Estimado", f"{soh_estimado:.1f}%")
-    m_soh2.metric("Autonomía 100% Registrada", f"{auto_actual:.0f} km", f"{auto_actual - auto_fabrica:.0f} km vs Fábrica")
-    
+    m_soh2.metric("Autonomía 100% Registrada", f"{auto_actual:.0f} km")
     st.progress(min(1.0, max(0.0, soh_estimado / 100.0)))
 
 # TAB 6: MÓDULO DE EXPORTACIÓN Y REPORTES
 with pestanas[5]:
     st.subheader("📂 Exportación de Reportes e Informes")
-    st.caption("Descarga tu información histórica en formato Excel o CSV para contabilidad personal y respaldos.")
-    
     df_exp = cargar_historial()
     
     if not df_exp.empty:
-        st.write("### 📥 Opciones de Descarga Directa")
-        
         csv_buffer = df_exp.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="📄 Descargar Historial en Formato CSV",
@@ -421,17 +436,11 @@ with pestanas[5]:
             df_exp.to_excel(writer, sheet_name='Historial Cargas', index=False)
             resumen_data = {
                 "Métrica": ["Energía Total (kWh)", "Gasto Total (COP)", "Promedio Temp (°C)", "Total Cargas"],
-                "Valor": [
-                    df_exp['energia_kwh'].sum(),
-                    df_exp['costo_cop'].sum(),
-                    df_exp['temperatura'].mean(),
-                    len(df_exp)
-                ]
+                "Valor": [df_exp['energia_kwh'].sum(), df_exp['costo_cop'].sum(), df_exp['temperatura'].mean(), len(df_exp)]
             }
             pd.DataFrame(resumen_data).to_excel(writer, sheet_name='Resumen Métricas', index=False)
             
         excel_data = output_excel.getvalue()
-        
         st.download_button(
             label="📊 Descargar Informe Completo en Excel (.xlsx)",
             data=excel_data,
@@ -445,19 +454,24 @@ with pestanas[5]:
 
 # TAB 7: AJUSTES Y CONFIGURACIÓN
 with pestanas[6]:
-    st.subheader("Configuración y Tarifas en Base de Datos")
+    st.subheader("Configuración y Potencias en Base de Datos")
     with st.form("form_config"):
         new_cap = st.number_input("Capacidad Batería (kWh)", value=float(config['capacidad_bateria']), step=0.1)
-        new_amp = st.number_input("Amperaje Lento Feyree (A)", value=float(config['amperaje']), step=1.0)
+        new_amp = st.number_input("Amperaje Lento Referencia (A)", value=float(config['amperaje']), step=1.0)
         new_volt = st.number_input("Voltaje Promedio (V)", value=float(config['voltaje']), step=1.0)
         new_ef = st.slider("Eficiencia de Carga (%)", 80, 100, int(config['eficiencia'] * 100)) / 100.0
+        
+        st.markdown("---")
+        st.subheader("⚡ Potencias de Carga (kW)")
+        new_pot_lenta = st.number_input("Potencia Carga Lenta - AC (kW) [Ej. Feyree ~4 kW]", value=float(config.get('potencia_lenta_kw', 4.0)), step=0.1)
+        new_pot_rapida = st.number_input("Potencia Carga Rápida - DC (kW) [Ej. Estación pública]", value=float(config.get('potencia_rapida_kw', 40.0)), step=1.0)
         
         new_consumo_100 = st.number_input("Consumo Estándar (kWh por cada 100 km)", value=float(config['consumo_100km']), step=0.1)
         rend_auto = 100.0 / new_consumo_100 if new_consumo_100 > 0 else 8.33
         st.caption(f"Rendimiento equivalente calculado: **{rend_auto:.2f} km/kWh**")
         
         st.markdown("---")
-        new_auto_100 = st.number_input("Autonomía actual estimada al 100% (km en pantalla del carro)", value=float(config.get('autonomia_100_actual', 380.0)), step=1.0)
+        new_auto_100 = st.number_input("Autonomía actual estimada al 100% (km en pantalla)", value=float(config.get('autonomia_100_actual', 380.0)), step=1.0)
         
         st.markdown("---")
         st.subheader("Parámetros Financieros (ROI y Gasolina)")
@@ -469,5 +483,5 @@ with pestanas[6]:
         new_trapida = st.number_input("Tarifa Carga Rápida ($/kWh - Estación)", value=float(config['tarifa_rapida']), step=10.0)
         
         if st.form_submit_button("💾 Guardar Configuración", type="primary", use_container_width=True):
-            actualizar_config(new_cap, new_amp, new_volt, new_ef, new_consumo_100, new_tlenta, new_trapida, new_auto_100, new_p_gas, new_c_feyree)
-            st.success("¡Configuración actualizada en la base de datos!")
+            actualizar_config(new_cap, new_amp, new_volt, new_ef, new_consumo_100, new_tlenta, new_trapida, new_auto_100, new_p_gas, new_c_feyree, new_pot_lenta, new_pot_rapida)
+            st.success("¡Configuración y potencias actualizadas en la base de datos!")
