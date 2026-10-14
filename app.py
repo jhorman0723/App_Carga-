@@ -161,15 +161,26 @@ def eliminar_carga(id_carga):
 
 def cargar_historial():
     conn = sqlite3.connect("cargas_byd.db")
-    df = pd.read_sql_query("SELECT * FROM cargas ORDER BY fecha DESC, id DESC", conn)
+    df = pd.read_sql_query("SELECT * FROM cargas ORDER BY fecha ASC, id ASC", conn)
     conn.close()
+    
+    if not df.empty:
+        df['fecha_dt'] = pd.to_datetime(df['fecha'])
+        # Calcular los días transcurridos respecto a la carga anterior
+        df['dias_desde_anterior'] = df['fecha_dt'].diff().dt.days
+        # Formatear la columna para que la primera carga diga "N/A (Inicio)"
+        df['dias_desde_anterior'] = df['dias_desde_anterior'].apply(lambda x: f"{int(x)} días" if pd.notnull(x) else "Primera carga")
+        # Reordenar para mostrar primero las más recientes en la app
+        df = df.sort_values(by=['fecha_dt', 'id'], ascending=[False, False])
+        df = df.drop(columns=['fecha_dt'])
+        
     return df
 
 config = obtener_config()
 
 # --- ENCABEZADO PRINCIPAL ---
 st.title("⚡ BYD Yuan Up")
-st.caption("Gestor Inteligente de Carga, Consumo y Potencias")
+st.caption("Gestor Inteligente de Carga, Frecuencia y Ahorro")
 
 pestanas = st.tabs(["🧮 Calculadora", "📝 Registrar Carga", "📊 Historial", "💰 Ahorro & ROI", "🔋 Salud SOH", "📂 Reportes", "⚙️ Ajustes"])
 
@@ -179,7 +190,6 @@ with pestanas[0]:
     
     tipo_sim = st.radio("Tipo de Carga:", ["Carga Lenta (AC / Casa)", "Carga Rápida (DC / Estación)"], horizontal=True, key="tipo_s")
     
-    # Asignación de tarifas y potencias personalizadas desde la base de datos
     if "Lenta" in tipo_sim:
         tarifa_activa = config['tarifa_lenta']
         potencia_kw = config['potencia_lenta_kw']
@@ -307,7 +317,7 @@ with pestanas[1]:
 
 # TAB 3: HISTORIAL Y GRÁFICOS
 with pestanas[2]:
-    st.subheader("Historial de Cargas y Consumos")
+    st.subheader("Historial de Cargas y Frecuencia")
     df_graf = cargar_historial()
     
     if not df_graf.empty:
@@ -319,17 +329,19 @@ with pestanas[2]:
         c_cop.metric("Gasto Total Acumulado", f"${total_costo:,.0f} COP")
         
         st.markdown("---")
-        st.subheader("Tabla de Registros")
+        st.subheader("Tabla de Registros con Días Transcurridos")
         st.dataframe(df_graf, use_container_width=True)
         
-        df_graf['fecha'] = pd.to_datetime(df_graf['fecha'])
-        df_graf = df_graf.sort_values('fecha')
+        # Gráficos temporales
+        df_chart = df_graf.copy()
+        df_chart['fecha_dt'] = pd.to_datetime(df_chart['fecha'])
+        df_chart = df_chart.sort_values('fecha_dt')
         
         st.subheader("⚡ Consumo de Energía por Carga (kWh)")
-        st.line_chart(df_graf.set_index('fecha')['energia_kwh'])
+        st.line_chart(df_chart.set_index('fecha_dt')['energia_kwh'])
         
         st.subheader("💰 Costo por Carga ($ COP)")
-        st.bar_chart(df_graf.set_index('fecha')['costo_cop'])
+        st.bar_chart(df_chart.set_index('fecha_dt')['costo_cop'])
     else:
         st.info("Aún no hay historial de cargas registrado.")
 
